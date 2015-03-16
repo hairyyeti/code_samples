@@ -34,7 +34,7 @@ int main()
     int r = v.size();
     int c = v[0].size();
     for (int i=0; i<r ; i++ ) 
-      {s
+    {
         for (int j=0; j<c ; j++ )
             cout << v[i][j] << " ";
         cout << endl;
@@ -47,13 +47,13 @@ int main()
     int r2 = v.size();
     int c2 = v[0].size();
     for (int i=0; i<r2 ; i++ ) 
-      {
-        for (int j=0; j<c2 ; j++ ){
+    {
+        for (int j=0; j<c2 ; j++ )
+        {
             cout << v[i][j] << " ";
-            
         }
         cout<<endl;
-      }
+     }
     return 0;
 }
 
