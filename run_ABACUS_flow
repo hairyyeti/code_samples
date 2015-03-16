@@ -1,0 +1,415 @@
+#!/bin/bash
+
+clear
+
+matlab_path='~/.matlab/R2010b_licenses/license_scale01_693585_R2010b.lic'
+
+DESIGN_NAME=me_sad_calculation
+ORG_DIR="./Original"
+ORG_VFILE=$ORG_DIR/SRC/$DESIGN_NAME.v
+MOD_DIR="./Modified"
+VALIDATE_DIR="./Cross_Validate"
+MOD_VFILE=$MOD_DIR/SRC/$DESIGN_NAME.v
+ODIN_DIR="./trunk/ODIN_II/ODIN_II"
+POP_DIR="./Population"
+Gen_Repeat=0
+Gen_Repeat_limit=8 #was 5
+File_Repeat=0
+File_Repeat_limit=10 #was 5
+sim_stat="-1"
+syn_stat="-1"
+
+Num_Generation=8 #was 15
+Num_perGen=10 #was 3
+Num_testCases=4
+Num_sel=4 #number of minimum file generations
+Index=1
+#START=$($date+%s%N)
+
+area_threshold=-10;
+power_threshold=-10;
+
+
+ if [ -d Population ]; then
+ 	rm -rf Population
+ fi
+ mkdir Population
+ mkdir ./Population/Graphs ./Population/SRC
+ if [ -d './DataAnalyze/Data' ]; then
+ 	rm -rf './DataAnalyze/Data'
+ fi
+ mkdir ./DataAnalyze/Data
+ 
+ cp	$ORG_DIR/SRC/"$DESIGN_NAME"_org.v 	$ORG_VFILE
+ echo "--------------------------------------------------------------------"
+ date;
+ echo -e "Evolution start. Orignal design set."
+ echo "--------------------------------------------------------------------"
+ 
+ for ((Generation=1; Generation<=$Num_Generation; Generation++));
+ do
+ 	cd ./DataAnalyze
+ 		if [ -f './Data/FilesInfo_G'$Generation.txt ]; then
+ 			rm -rf './Data/FilesInfo_G'$Generation.txt
+ 		fi
+ 		echo -e '#File_Name\tMean_Accuracy(%)\tMean_Modified_DB\tMin_Accuracy(%)\tMin_Modified_DB\tArea_Saving(%)\tPower_Saving(%)\tNet_slack(ns)\tAdd_Savings(%)\n' > './Data/FilesInfo_G'$Generation.txt
+ 	cd ..
+ 
+ 	# First process original design or the selected approximate design for the next generation
+ 	if (( Generation == 1 )); then
+ 		cd Original
+ 			# Create folder for output files
+ 			for ((i=1; i<=$Num_testCases; i++))
+ 			do
+ 			
+ 				if [ -d output_test$i ]; then
+ 					rm -rf output_test$i
+ 				fi
+ 				mkdir output_test$i
+ 			done
+ 
+ 			# Call DesignCompiler for synthesis
+ 			echo "--------------------------------------------------------------------"
+ 			echo -e "Processing parent mutant for Generation $Generation"
+ 			echo -e '\nSynthesising...'
+ 			dc_shell -f ./dc/run_synth.tcl > ./output/syn_log.txt
+ 			echo -e 'Synthesis done.'
+ 			
+ 			#--Added critical path identification part--
+ 			
+ 			cp_slack=`cat output/sta_stp_rpt | awk '{if ($1=="slack") print $3}' | head -1`
+ 			cp_count=`cat output/sta_stp_rpt | awk -v cp_slack=$cp_slack '{if ($3==cp_slack) print "CP identified"}' | wc -l`
+ 			cp_total_regs=$(echo "($cp_count * 2) + 10" | bc -l)
+
+ 			critical_path=`cat output/sta_stp_rpt | awk '{if ($1=="Startpoint:" || $1=="Endpoint:") print $2}' | head -$cp_total_regs | awk -F '_reg\\\[' '{print $1}' | awk -F '\\\/' '{print $1}'`
+
+ 			if [ -z "$critical_path" ]; then
+ 			    echo -e 'Problem with critical path identification'
+ 			else
+ 			    echo -e 'Critical path identified'
+ 			    echo "$critical_path" > "../trunk/ODIN_II/ODIN_II/SRC/test.txt"
+ 			fi
+            #--Critical path identification end--
+ 			
+ 			for ((SimFile=1; SimFile<=$Num_testCases; SimFile++));
+ 			do 
+ 				# Call ModelSim for simulation
+ 				echo -e 'Simulating...'
+ 				vsim -c -do "./modelsim/Dooo"$SimFile".do" > "./output/sim_log"$SimFile".txt"
+ 				echo -e 'Simulation done.'
+ 			done
+ 
+ 		cd ..
+ 	rm -rf $POP_DIR/SRC/*
+	
+	fi
+
+ 	
+  	# Analyze simulation result to guide approximation.
+  	if (( Generation == 1 )); then
+  		cd DataAnalyze
+  			feedback=`matlab -nodesktop -nosplash -logfile feedback_log.txt -r "simulation_feedback();quit;" | awk -vRS="\x0" '{print $NF}'`;
+  		cd ..
+  	fi
+  
+  	for ((VlogFile=1; VlogFile<=$Num_perGen; VlogFile++));
+  	do
+  		echo "--------------------------------------------------------------------"
+  		echo "Generation $Generation File No.$VlogFile"
+  
+  		# Call the ODIN_II tool to do approximation
+  		# For now the tool is only generating equivalent Verilog file, no changing functions applied#
+  		#valgrind -q $ODIN_DIR/odin_II.exe -V $ORG_VFILE -m $feedback -A 
+  		ODIN_stat=`$ODIN_DIR/odin_II.exe -V $ORG_VFILE -A | awk '{if($1~/Succesful/) print $1 }'`
+  		echo $ODIN_stat
+  		#gdb -batch-silent --eval-command=run --args $ODIN_DIR/odin_II.exe -V $ORG_VFILE -A
+		
+  		# Move modified Verilog file to directory
+  		if [ "$ODIN_stat" == "Succesful" ]; then
+  			for((i=1; i<=$Num_testCases; i++))
+ 			do
+ 				cp $DESIGN_NAME"_fromAST.v" $MOD_DIR/SRC_test$i/$DESIGN_NAME.v;
+  				# Move dot file to output folder and generate graphic view
+  				#dot -Teps $DESIGN_NAME"_ast.dot" -o $POP_DIR/Graphs/$DESIGN_NAME"_G"$Generation"_F"$VlogFile"_view.eps"
+ 			done
+ 			rm -rf $DESIGN_NAME"*"
+  		else
+  			echo -e "ODIN failed, repeat Generation $Generation File $VlogFile."
+  			((File_Repeat++));
+  			if (( File_Repeat > File_Repeat_limit )); then
+  				echo -e "File repeat time exceeded, cannot get an acceptable approximate, move on to fitness evaluation for Generation $Generation..."
+  				File_Repeat=0;
+  				break;
+  			fi
+  			((VlogFile--));
+  			continue;
+  		fi
+  
+  		# Then process modified project
+  		cd Modified
+  			# Create folder for output files
+  			for ((i=1; i<=$Num_testCases; i++))
+ 			do
+ 				if [ -d output_test$i ]; then
+  					rm -rf output_test$i
+  				fi
+  			mkdir output_test$i
+  			done
+ 
+ 			for ((SimFile=1; SimFile<=$Num_testCases; SimFile++));
+ 			do 
+ 				# Call ModelSim for simulation
+ 				echo -e 'Simulating...'
+ 				vsim -c -do "./modelsim/Dooo"$SimFile".do" > "./output_test"$SimFile"/sim_log"$SimFile".txt"
+ 				echo -e 'Simulation done.'
+ 				#rm -r work
+ 				#rm -r vsim.wlf
+ 			done
+ 
+ 	 		cd ..
+  
+   		# Use MATLAB to analyze two sets of data
+  		cd DataAnalyze
+  			if [ -f ../$MOD_DIR/output_test1/psnr.txt ]; then
+  				echo -e '\nPre-select data analysis...'
+  				sim_stat=`matlab -nodesktop -nosplash -logfile 'pre-select_report.txt' -r "data_compare($Generation, $Generation, $VlogFile, $Num_testCases);" | awk '{if ($1 ~ /-1/) print $1}'`
+  				if [ "$sim_stat" != "-1" ]; then
+  					echo -e 'Data analysis passed, start synthesis...'
+  					# Call DesignCompiler for synthesis
+  					cd ../$MOD_DIR
+  					dc_shell -f ./dc/run_synth1.tcl > ./output_test1/syn_log.txt
+
+ 			        if ((VlogFile==1 && Generation>1)); then
+ 			            #--Added critical path identification part--
+ 			            cp_slack_mod=`cat output1/sta_stp_rpt | awk '{if ($1=="slack") print $3}' | head -1`
+ 			            cp_count_mod=`cat output1/sta_stp_rpt | awk -v cp_slack_mod=$cp_slack_mod '{if ($3==cp_slack_mod) print "CP identified"}' | wc -l`
+ 			            cp_total_regs_mod=$(echo "($cp_count_mod * 2)+10" | bc -l)
+ 			            
+ 			            
+ 			            critical_path_mod=`cat output1/sta_stp_rpt | awk '{if ($1=="Startpoint:" || $1=="Endpoint:") print $2}' | head -$cp_total_regs_mod | awk -F '_reg\\\[' '{print $1}' | awk -F '\\\/' '{print $1}'`
+ 			            if [ -z "$critical_path_mod" ]; then
+ 			                echo -e 'Problem with critical path identification'
+ 			            else
+ 			                echo -e 'Critical path identified'
+ 			                echo "$critical_path_mod" > "../trunk/ODIN_II/ODIN_II/SRC/test.txt"
+ 			            fi
+                        #--Critical path identification end--
+                    fi
+
+  					cd -
+  					
+  					# Derive area & power saving data.
+  				    org_area=`cat ../Original/output/area_rpt | grep 'Total cell area' | awk '{print $4}'`
+  				    mod_area=`cat ../Modified/output1/area_rpt | grep 'Total cell area' | awk '{print $4}'`
+                    #area_saving=$(echo $org_area - $mod_area | bc)
+  					
+  					org_dyn_pwr=`cat ../Original/output/pwr_rpt | grep 'Total Dynamic Power' | awk '{if ($6 ~ /uW/) print ($5/1000); else print $5}'`
+  					org_leakage=`cat ../Original/output/pwr_rpt | grep 'Cell Leakage Power' | awk '{if ($6 ~ /uW/) print ($5/1000); else print $5}'`
+  					org_total_pwr=$(echo $org_dyn_pwr + $org_leakage | bc)
+  					echo -e 'Original Power: '$org_total_pwr
+
+  					mod_dyn_pwr=`cat ../Modified/output1/pwr_rpt | grep 'Total Dynamic Power' | awk '{if ($6 ~ /uW/) print ($5/1000); else print $5}'`
+  					mod_leakage=`cat ../Modified/output1/pwr_rpt | grep 'Cell Leakage Power' | awk '{if ($6 ~ /uW/) print ($5/1000); else print $5}'`
+                    mod_total_pwr=$(echo $mod_dyn_pwr + $mod_leakage | bc)
+                    #pwr_saving=$(echo $org_total_pwr - $mod_total_pwr | bc)
+                    echo -e 'Initial Modified Power: '$mod_total_pwr
+
+  					org_slack=`cat ../Original/output/sta_stp_rpt | grep 'slack (MET)' | head -1 | awk '{print $3}'`
+  					echo -e 'Original circuit slack: '$org_slack
+  					mod_slack=`cat ../Modified/output1/sta_stp_rpt | grep 'slack (MET)' | head -1 | awk '{print $3}'`
+  				    echo -e 'Modified circuit slack: '$mod_slack
+  				    net_slack=$(echo $mod_slack - $org_slack | bc)
+                    echo -e 'net_slack_1.0: '$net_slack 
+                   
+                    #-------take the netlist and synthesize against other voltage corners to get interpolated power value based on timing slack-------
+                    cd ../$MOD_DIR
+                    #echo -e 'Checkpoint 1'
+
+                    dc_shell -f ./run_synth_VDD_0_8.tcl > ./output1/syn_VDD_0_8.txt
+                   # dc_shell -f ./run_synth_VDD_0_75.tcl > ./output1/syn_VDD_0_75.txt
+                    
+                    
+  					mod_slack_0_8=`cat output1/sta_stp_rpt_me_sad_calculation_netlist0_8 | grep 'slack' | head -1 | awk '{print $3}'`
+  				    net_slack_0_8=$(echo $mod_slack_0_8 - $org_slack | bc)
+  				    echo 'net_slack_0_8: '$net_slack_0_8
+  					
+                    #echo -e 'Checkpoint 2'
+
+                    #mod_slack_0_75=`cat output1/sta_stp_rpt_me_sad_calculation_netlist0_75 | grep 'slack' | head -1 | awk '{print $3}'`
+  				    #net_slack_0_75=$(echo $mod_slack_0_75 - $org_slack | bc)
+
+  				    #echo 'net_slack_0_75: '$net_slack_0_75
+                    #if [ "$net_slack_0_8" == "$net_slack_0_75" ]; then
+                    #    $net_slack_0_75=$(echo $net_slack_0_75 - 0.0001 | bc)
+                    #fi
+
+                    #echo -e 'Checkpoint 3'
+
+  					mod_dyn_pwr_0_8=`cat output1/pwr_rpt_me_sad_calculation_netlist0_8 | grep 'Total Dynamic Power' | awk '{if ($6 ~ /uW/) print ($5/1000); else print $5}'`
+  					mod_leakage_0_8=`cat output1/pwr_rpt_me_sad_calculation_netlist0_8 | grep 'Cell Leakage Power' | awk '{if ($6 ~ /uW/) print ($5/1000); else print $5}'`
+                    mod_total_pwr_0_8=$(echo $mod_dyn_pwr_0_8 + $mod_leakage_0_8 | bc)
+
+  				    echo 'mod_total_pwr_0_8: '$mod_total_pwr_0_8
+                    #echo -e 'Checkpoint 4'
+
+  					#mod_dyn_pwr_0_75=`cat output1/pwr_rpt_me_sad_calculation_netlist0_75 | grep 'Total Dynamic Power' | awk '{if ($6 ~ /uW/) print ($5/1000); else print $5}'`
+  					#mod_leakage_0_75=`cat output1/pwr_rpt_me_sad__netlist0_75 | grep 'Cell Leakage Power' | awk '{if ($6 ~ /uW/) print ($5/1000); else print $5}'`
+                   # mod_total_pwr_0_75=$(echo $mod_dyn_pwr_0_75 + $mod_leakage_0_75 | bc)
+  					
+  				    #echo 'mod_total_pwr_0_75: '$mod_total_pwr_0_75
+                    #echo -e 'Checkpoint 5'
+                    #calling matlab script to do interpolation
+
+                    
+                    slack_converted_pwr=`matlab -nosplash -nodesktop -r "interpolation($mod_slack_0_8, $mod_slack, $mod_total_pwr_0_8, $mod_total_pwr, $org_slack);" | awk '{if ($1 + 0 == $1) print $1}'`
+                    
+
+                    
+                    #echo -e 'Checkpoint 5.5'
+                    echo -e 'Slack_converted_pwr: '$slack_converted_pwr
+                    #echo -e 'Mod_total_pwr: '$mod_total_pwr
+
+                   # additional_pwr_saving=$(echo $mod_total_pwr - $slack_converted_pwr | bc)
+                   # final_mod_pwr=$(echo $additional_pwr_saving + $mod_total_pwr | bc)
+                   
+                   if [ $(echo "$net_slack > 0" | bc -l) -eq 1 ]; then
+                       if [ $(echo "$slack_converted_pwr < $mod_total_pwr" | bc -l) -eq 1 ]; then
+                           if [ $(echo "$slack_converted_pwr > 0" | bc -l) -eq 1 ]; then
+                                final_mod_pwr=$slack_converted_pwr
+                                extra_savings=$(echo $mod_total_pwr - $slack_converted_pwr | bc -l)
+                           else
+                                final_mod_pwr=$mod_total_pwr
+                                extra_savings=0
+                           fi
+                       else
+                           final_mod_pwr=$mod_total_pwr
+                           extra_savings=0
+                       fi
+                   else
+                       final_mod_pwr=$mod_total_pwr
+                       extra_savings=0
+                   fi
+                   
+
+                   echo -e 'Final mod_pwr: '$final_mod_pwr
+                   # echo -e 'Checkpoint 6'
+                    cd ../DataAnalyze 
+                    #-------end slack converesion to power--------
+
+                    
+  					syn_stat=`matlab -nosplash -nodesktop -logfile 'savings_report.txt' -r "Savings($Generation, $org_area, $mod_area, $org_total_pwr, $final_mod_pwr, $extra_savings, $org_slack, $mod_slack);" | awk '{if ($1 == "0" || $1 == "-1" || $1 == "-2") print $1}'` 
+                    #cat ./Data/FilesInfo_G"$Generation".txt | awk '{if($6 !~/0/) print $1"\t\t"$2"\t\t"$3"\t\t"$4"\t\t"$5"\t\t"$6"\t\t"$7"\t\t"$8}' > ./Data/FilesInfo_G"$Generation"_tmp.txt
+                        #cat ./Data/FilesInfo_G"$Generation"_tmp1.txt ./Data/FilesInfo_G"$Generation"_tmp2.txt > ./Data/FilesInfo_G"$Generation"_tmp.txt
+		            #mv ./Data/FilesInfo_G"$Generation"_tmp.txt ./Data/FilesInfo_G"$Generation".txt
+  					#valid_file_count=`wc -l './Data/FilesInfo_G'$Generation'.txt' | awk '{print $1}'`
+                    
+  					if [ "$syn_stat" == "0" ]; then
+  						echo -e 'Synthesis done!'
+  					fi
+  					    echo "--------------------------------------------------------------------"
+  					    # Save current mutant to Population.
+						cp ../$MOD_DIR/SRC_test1/$DESIGN_NAME.v ../$POP_DIR/SRC/$DESIGN_NAME"_G"$Generation"_F"$VlogFile.v
+  					    File_Repeat=0;
+                    
+  				else
+  					echo -e "Data analysis failed, repeat Generation $Generation File $VlogFile."
+  					((File_Repeat++));
+  					((accuracy_fail_ctr++));
+  					if (( File_Repeat > File_Repeat_limit )); then
+  						echo -e "File repeat time exceeded, cannot get an acceptable approximate, move on to fitness evaluation for Generation $Generation..."
+  						File_Repeat=0;
+  						cd ..
+  						break;
+  					fi
+  					((VlogFile--));
+  				fi
+  				cd ..
+  			else
+  				# If invalid .v file, get another one for this iteration
+  				echo -e "\nSimulation failed, repeat Generation $Generation File $VlogFile."
+  				((File_Repeat++));
+  				if (( File_Repeat > File_Repeat_limit )); then
+  					echo -e "File repeat time exceeded, cannot get an acceptable approximate, move on to fitness evaluation for Generation $Generation..."
+  					File_Repeat=0;
+  					cd ..
+  					break;
+  				fi
+  				((VlogFile--));
+  				cd ..
+  			fi
+ 	done
+ 
+	#END=$(date+%s%N)
+	#RUNTIME=$(( END-START ))
+	#echo "Runtime: $RUNTIME seconds"
+
+ 	# Do fitness evaluation for one generation, and if none acceptable repeat this generation
+ 	cd DataAnalyze
+ 		
+        #cat ./Data/FilesInfo_G"$Generation".txt | awk '{if($4 !~/0/) print $1"\t\t"$2"\t\t"$3"\t\t"$4"\t\t"$5}' > ./Data/FilesInfo_G"$Generation"_tmp.txt
+		#mv ./Data/FilesInfo_G"$Generation"_tmp.txt ./Data/FilesInfo_G"$Generation".txt
+    
+		initial_line_ctr=`wc -l './Data/FilesInfo_G'$Generation'.txt' | awk '{print $1}'`
+	    cat ./Data/FilesInfo_G"$Generation".txt | awk '{if($7 > '$power_threshold' && $6 > '$area_threshold' && $2 != "Inf" && $7 != "0.0") print $1"\t\t"$2"\t\t"$3"\t\t"$4"\t\t"$5"\t\t"$6"\t\t"$7"\t\t"$8"\t\t"$9}' > ./Data/FilesInfo_G"$Generation"_tmp.txt
+		mv ./Data/FilesInfo_G"$Generation"_tmp.txt ./Data/FilesInfo_G"$Generation".txt
+        final_line_ctr=`wc -l './Data/FilesInfo_G'$Generation'.txt' | awk '{print $1}'`
+        num_mutants_discarded=$(echo $initial_line_ctr - $final_line_ctr | bc)
+        accuracy_fail_ctr=$(echo $accuracy_fail_ctr + $num_mutants_discarded | bc)
+    
+        echo "--------------------------------------------------------------------"
+ 		echo -e 'Fitness evaluation...'
+ 		evolve='-1';
+ 		evolve=`matlab -nodesktop -nosplash -r "fitness_evaluation($Generation)" | awk '{if ($1 ~ /Error/) print $1}'`
+ 		stty echo
+ 		if  [ "$evolve" == "Error" ]; then
+ 			echo -e "All mutants are of lower accuracy than desired, repeat Generation $Generation..."
+ 			((Gen_Repeat++));
+ 			if (( Gen_Repeat > Gen_Repeat_limit )); then
+ 				echo -e "Generation repeat time exceeded, flow teminates at Generation $Generation..."
+ 				break;
+ 			fi
+
+ 			((Generation--));
+ 		else
+ 			echo -e 'Fitness evaluation done.'
+ 				echo "--------------------------------------------------------------------"
+ 			Gen_Repeat=0;
+ 		fi
+ 	cd ..
+done
+
+
+
+#echo "--------------------------------------------------------------------"
+#echo -e 'Cross Validation started'
+#echo "--------------------------------------------------------------------"
+#
+#		cd $POP_DIR
+#	
+#		for ((Generation=1; Generation<=$Num_Generation; Generation++));
+#		do
+#			for ((VlogFile=1; VlogFile<=$Num_perGen; VlogFile++));
+#			do
+#				if [ -f ./SRC/$Design_NAME"_G"$Generation"_F"$VlogFile.v ]; then
+#					for ((validate_index=1; validate_index<=Num_Validate;validate_index++))
+#					do
+#						cp ./SRC/$DESIGN_NAME"_G"$Generation"_F"$VlogFile.v ../$VALIDATE_DIR/SRC_test$validate_index/$DESIGN_NAME.v
+#					
+#					vsim -c -do ../$VALIDATE_DIR/modelsim/Dooo$validate_index.do
+#					done
+#				fi
+#			
+#				cd ../DataAnalyze
+#				((Index=$Num_perGen*($Generation-1)+$VlogFile))
+#				echo -e "Recording data for No. $Index"
+#				matlab -nodesktop -nosplash -r "data_compare_validate(0,$Generation, $VlogFile);"
+#				stty echo
+#			cd ..
+#			done
+#		done
+
+echo "--------------------------------------------------------------------"
+echo -e 'Flow completed!'
+echo -e 'Accuracy fail ctr: '$accuracy_fail_ctr > accuracy_fail_ctr.txt
+date;
+echo "--------------------------------------------------------------------"
