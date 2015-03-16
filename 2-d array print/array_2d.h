@@ -18,9 +18,9 @@ class array_2d
 public:
     
     array_2d(){} //default constructor
-    array_2d(unsigned row, unsigned col); //constructor with arguments
+    array_2d(unsigned &row, unsigned &col); //constructor with arguments
     ~array_2d(); //destructor
-    double* operator[](unsigned row); 
+    double* operator[](unsigned &row); 
     
 private:
     friend ostream& operator<<(ostream&, array_2d const& a); //friend method that allows external functions to access private values
