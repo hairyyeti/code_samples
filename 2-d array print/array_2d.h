@@ -32,7 +32,7 @@ private:
 
 //<< operator defined and overloaded for the 2d array
 inline ostream& operator<<(ostream& os, array_2d const& array2) //inline function definition
-{``
+{
   
     for( int x = 0; x < array2.row_; x++ )
       for( int y = 0; y < array2.col_; y++ )
