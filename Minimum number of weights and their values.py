@@ -12,7 +12,7 @@ def find_weights(input_W):
     return weights
 
 #weight to be measured
-input_W = 5;
+input_W = 41;
 
 weights= find_weights(input_W) #getting range of weights needed
 negative_weights = [ i * -1 for i in weights] #negatives of the weights, useful later for subtraction of weights/use on right scale
