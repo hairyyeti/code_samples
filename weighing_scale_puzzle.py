@@ -1,7 +1,4 @@
-
-
 import itertools
-import numpy as np
 
 def find_weights(input_W):
     weights = []
